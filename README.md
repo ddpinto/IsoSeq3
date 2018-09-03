@@ -4,7 +4,6 @@
 
 ***
 
-## Scope
 *IsoSeq3* contains the newest tools to identify transcripts in
 PacBio single-molecule sequencing data.
 Starting in SMRT Link v6.0.0, those tools power the
@@ -13,64 +12,60 @@ A composable workflow of existing tools and algorithms, combined with
 a new clustering technique, allows to process the ever-increasing yield of PacBio
 machines with similar performance to *IsoSeq1* and *IsoSeq2*.
 
+## Availability
+Latest version can be installed via bioconda package `isoseq3`.
+
+Please refer to our [official pbbioconda page](https://github.com/PacificBiosciences/pbbioconda)
+for information on Installation, Support, License, Copyright, and Disclaimer.
 
 ## Overview
- - [SMRTbell Designs](README.md#smrtbell-designs)
- - [Workflow Overview](README.md#workflow)
- - [Installation](README.md#installation)
+ - [Changelog](README.md#changelog)
+ - Workflow Overview: [high](README.md#high-level-workflow) / [mid](README.md#mid-level-workflow) / [low](README.md#low-level-workflow) level
  - [Real-World Example](README.md#real-world-example)
  - [FAQ](README.md#faq)
-
-## Availability
-The latest pre-release, developers-only linux binaries can be found under
-[releases](https://github.com/PacificBiosciences/IsoSeq3/releases) or
-installed via [bioconda](https://bioconda.github.io/):
-
-    conda install isoseq3
-
-These binaries are not ISO compliant.
-For research only.
-Not for use in diagnostics procedures.
-
-Official support is only provided for official and stable SMRT Link builds
-provided by PacBio.
-
-Unofficial support for binary pre-releases is provided via github issues,
-not via mail to developers.
-
-Binaries require **SSE4.1 CPU support**; CPUs after 2008 (Penryn) include it.
+ - [SMRTbell Designs](README.md#what-smrtbell-designs-are-possible)
 
 ## Changelog
 
+ * 3.1.0: Add `refine` step to workflow
  * 3.0.0: Initial release, included in SMRT Link 6.0.0
 
-## SMRTbell designs
+## High-level workflow
 
-PacBio supports three different SMRTbell designs for IsoSeq libraries.
-In all designs, transcripts are labelled with asymmetric primers,
-whereas a polyA tail is optional.
-For whole-genome libraries, barcodes can be attached to the 3' primer.
+The high-level workflow depicts files and processes:
 
-<img width="600px" src="doc/img/isoseq3-barcoding.png"/>
+<img width="1000px" src="doc/img/isoseq3-end-to-end.png"/>
 
-## Workflow
+## Mid-level workflow
+
+The mid-level workflow schematically explains what happens at each stage:
 
 <img width="1000px" src="doc/img/isoseq3-workflow.png"/>
 
-### Input
-For each cell, the `<movie>.subreads.bam` and `<movie>.subreads.bam.pbi`
-are needed for processing.
+## Low-level workflow
 
-### Consensus calling
+The low-level workflow explained via CLI calls. All necessary dependencies are
+installed via bioconda.
+
+### Step 0 - Input
+For each SMRT cell, the `movieX.subreads.bam`, `movieX.subreads.bam.pbi`,
+and `movieX.subreadset.xml` are needed for processing.
+
+### Step 1 - Circular Consensus Sequence calling
 Each sequencing run is processed by [*ccs*](https://github.com/PacificBiosciences/unanimity)
-to generate one representative consensus sequence for each ZMW. Only ZMWs with
-at least one full pass, meaning at least each primer has been seen once, are
-used for the subsequent analysis. Furthermore, polishing is not necessary
-in this step and is deactivated.
+to generate one representative circular consensus sequence (CCS) for each ZMW. Only ZMWs with
+at least one full pass (at least one subread with SMRT adapter on both ends) are
+used for the subsequent analysis. Polishing is not necessary
+in this step and is by default deactivated through.
 
-    ccs movie.subreads.bam ccs.bam --no-polish --num-passes 1
+    $ ccs movieX.subreads.bam movieX.ccs.bam --noPolish --minPasses 1
 
-### Primer removal and demultiplexing
+For long movies and short inserts, it is advised to limit the number of subreads
+used per ZMW; this can decrease run-time (only available in ccs version ≥ 3.1.0):
+
+    $ ccs movieX.subreads.bam movieX.ccs.bam --noPolish --minPasses 1 --maxPoaCoverage 10
+
+### Step 2 - Primer removal and demultiplexing
 Removal of primers and identification of barcodes is performed using [*lima*](https://github.com/pacificbiosciences/barcoding),
 which offers a specialized `--isoseq` mode.
 Even in the case that your sample is not barcoded, primer removal is performed
@@ -78,16 +73,20 @@ by *lima*.
 More information about how to name input primer(+barcode)
 sequences in this [FAQ](https://github.com/pacificbiosciences/barcoding#how-can-i-demultiplex-isoseq-data).
 
-    lima ccs.bam barcoded_primers.fasta demux.ccs.bam --isoseq --no-pbi
+    $ lima movieX.ccs.bam barcoded_primers.fasta movieX.fl.bam --isoseq --no-pbi
 
-The following is the `primer.fasta` for the Clontech SMARTer cDNA library prep, which is the officially recommended protocol:
+**Example 1:**
+Following is the `primer.fasta` for the Clontech SMARTer cDNA library prep,
+which is the officially recommended protocol:
 
     >primer_5p
     AAGCAGTGGTATCAACGCAGAGTACATGGG
     >primer_3p
     GTACTCTGCGTTGATACCACTGCTT
 
-The following are examples for barcoded samples using a 16bp barcode followed by Clontech primer:
+**Example 2:**
+Following are examples for barcoded primers using a 16bp barcode followed by
+Clontech primer:
 
     >primer_5p
     AAGCAGTGGTATCAACGCAGAGTACATGGGG
@@ -96,71 +95,92 @@ The following are examples for barcoded samples using a 16bp barcode followed by
     >liver_3p
     CTCACAGTCTGTGTGTGTACTCTGCGTTGATACCACTGCTT
 
-*Lima* will remove unwanted combinations and orient sequences according to
-the asymmetry of the primers.
+*Lima* will remove unwanted combinations and orient sequences to 5' → 3' orientation.
 
-From here on, execute the following steps for each output BAM file.
+Output files will be called according to their primer pair. Example for
+single sample libraries:
 
-### Clustering and polishing
-*IsoSeq3* wraps all tools into one fat binary.
+    movieX.fl.primer_5p--primer_3p.bam
 
-    $ isoseq3
-    isoseq3 - De Novo Transcript Reconstruction
+If your library contains multiple samples, execute the following workflow
+for each primer pair:
 
-    Tools:
-        cluster   - Cluster CCS reads to transcripts
-        polish    - Polish the clustering output
-        summarize - Create a barcode overview CSV file
+    movieX.fl.primer_5p--brain_3p.bam
+    movieX.fl.primer_5p--liver_3p.bam
 
-    Examples:
-        isoseq3 cluster movie.consensusreadset.xml unpolished.bam
-        isoseq3 polish unpolished.bam movie.subreadset.xml polished.bam
-        isoseq3 summarize polished.bam summary.csv
+### Step 3 - Refine
+Your data now contains full-length reads, but still needs to be refined by:
+ - [Trimming](https://github.com/PacificBiosciences/trim_isoseq_polyA) of poly(A) tails
+ - Rapid concatmer [identification](https://github.com/jeffdaily/parasail) and removal
 
-#### Clustering and transcript clean up
+**Input**
+The input file for *refine* is one demultiplexed CCS file with full-length reads
+and the primer fasta file:
+ - `<movie.primer--pair>.fl.bam` or `<movie.primer--pair>.fl.consensusreadset.xml`
+ - `primers.fasta`
+
+**Output**
+The following output files of *refine* contain full-length non-concatemer reads:
+ - `<movie>.flnc.bam`
+ - `<movie>.flnc.transcriptset.xml`
+
+Actual command to refine:
+
+    $ isoseq3 refine movieX.primer_5p--primer_3p.fl.bam primers.fasta movieX.flnc.bam
+
+If your sample has poly(A) tails, use `--require-polya`.
+This filters for FL reads that have a poly(A) tail
+with at least 20 base pairs and removes identified tail:
+
+    $ isoseq3 refine movieX.primer_5p--primer_3p.fl.bam movieX.flnc.bam --require-polya
+
+### Step 3b - Merge SMRT Cells
+If you used more than one SMRT cells, use `dataset` for merging.
+Merge all of your `<movie>.flnc.bam` files:
+
+    $ dataset create --type TranscriptSet merged.flnc.xml movie1.flnc.bam movie2.flnc.bam movieN.flnc.bam
+
+Similarly, merge all of your **source** `<movie>.subreadset.xml` files:
+
+    $ dataset create --type SubreadSet merged.subreadset.xml movie1.subreadset.xml movie2.subreadset.xml movieN.subreadset.xml
+
+### Step 4 - Clustering
 Compared to previous IsoSeq approaches, *IsoSeq3* performs a single clustering
 technique.
-Due to the nature of the algorithm, it can't be efficiently chunked
-without creating IO bottlenecks; it is advised to give this step as many cores
-as possible. The individual steps of *cluster* are as following:
- - [Trimming](https://github.com/PacificBiosciences/trim_isoseq_polyA) of polyA tails `--require-polya`
- - Rapid concatmer [identification](https://github.com/jeffdaily/parasail) and removal
+Due to the nature of the algorithm, it can't be efficiently parallelized.
+It is advised to give this step as many coresas possible.
+The individual steps of *cluster* are as following:
+
  - Clustering using hierarchical n*log(n) [alignment](https://github.com/lh3/minimap2) and iterative cluster merging
  - Unpolished [POA](https://github.com/rvaser/spoa) sequence generation
 
-##### Input
-The input file for *cluster* is one demultiplexed CCS file:
- - `<demux.ccs.bam>` or `<demux.ccs.consensusreadset.xml>`
+**Input**
+The input file for *cluster* is one FLNC file:
+ - `<movie>.flnc.bam` or `merged.flnc.xml`
 
-##### Output
+**Output**
 The following output files of *cluster* contain unpolished isoforms:
  - `<prefix>.bam`
- - `<prefix>.flnc.bam`
  - `<prefix>.fasta`
- - `<prefix>.bam.pbi` <- Only generated with `--pbi`
- - `<prefix>.transcriptset.xml` <- Only relevant for pbsmrtpipe
- - `<prefix>.consensusreadset.xml` <- Only relevant for pbsmrtpipe
+ - `<prefix>.bam.pbi`
+ - `<prefix>.transcriptset.xml`
 
 Example invocation:
 
-    isoseq3 cluster demux.P5--P3.bam unpolished.bam --verbose
+    $ isoseq3 cluster merged.flnc.xml unpolished.bam --verbose
 
-#### Polishing
-Polishing via the tool *polish* is an optional step, but highly recommended.
+### Step 5 - Serial Polishing
 The algorithm behind *polish* is the *arrow* model that also used for CCS
-generation and polishing of de-novo assemblies. This step can be massively
-parallelized by splitting the `unpolished.bam` file. Split BAM files can be
-generated by *cluster*.
+generation and polishing of de-novo assemblies.
 
-##### Input
+**Input**
 The input files for *polish* are:
  - `<unpolished>.bam` or `<unpolished>.transcriptset.xml`
- - `<movie_name>.subreads.bam` or `<movie_name>.subreadset.xml`
+ - `<movieX>.subreadset.xml` or `merged.subreadset.xml`
 
-##### Output
+**Output**
 The following output files of *polish* contain polished isoforms:
  - `<prefix>.bam`
- - `<prefix>.bam.pbi` <- Only generated with `--pbi`
  - `<prefix>.transcriptset.xml`
  - `<prefix>.hq.fasta.gz` with predicted accuracy ≥ 0.99
  - `<prefix>.lq.fasta.gz` with predicted accuracy < 0.99
@@ -169,35 +189,40 @@ The following output files of *polish* contain polished isoforms:
 
 Example invocation:
 
-    isoseq3 polish unpolished.bam m54020_171110_2301211.subreads.bam polished.bam
+    $ isoseq3 polish unpolished.bam merged.subreadset.xml polished.bam
 
-## Installation
- - *ccs*: Get it from the official [SMRT Link](https://www.pacb.com/support/software-downloads/) or compile your own from [unanimity](https://github.com/PacificBiosciences/unanimity)
- - *lima*: Pre-compiled binary from [barcoding](https://github.com/pacificbiosciences/barcoding)
- - *isoseq3*: Pre-compiled binaries from [releases](https://github.com/PacificBiosciences/IsoSeq3/releases)
+### Alternative Step 4/5 - Parallel Polishing
+Polishing can be massively parallelized on multiple servers by splitting
+the `unpolished.bam` file.
+Split BAM files can be generated by *cluster*.
 
-Add the directory containing the binaries to `PATH`:
+    $ isoseq3 cluster merged.flnc.xml unpolished.bam --verbose --split-bam 24
 
-```
-export PATH=$PATH:<path_to_binaries>
-```
+This will create up to 24 output BAM files:
+
+    unpolished.0.bam
+    unpolished.1.bam
+    ...
+
+Each of those `unpolished.<X>.bam` files can be polished in parallel:
+
+    $ isoseq3 polish unpolished.0.bam sample.subreadset.xml polished.0.bam
+    $ isoseq3 polish unpolished.1.bam sample.subreadset.xml polished.1.bam
+    $ ...
 
 ## Real-world example
 This is an example of an end-to-end cmd-line-only workflow to get from
-subreads to polished isoforms; timings are system dependent:
+subreads to polished isoforms:
 
     $ wget https://downloads.pacbcloud.com/public/dataset/RC0_1cell_2017/m54086_170204_081430.subreads.bam
     $ wget https://downloads.pacbcloud.com/public/dataset/RC0_1cell_2017/m54086_170204_081430.subreads.bam.pbi
+    $ wget https://downloads.pacbcloud.com/public/dataset/RC0_1cell_2017/m54086_170204_081430.subreadset.xml
 
     $ ccs --version
-    ccs 3.0.0 (commit f9f505c)
+    ccs 3.1.0 (commit v3.1.0)
 
-    $ time ccs m54086_170204_081430.subreads.bam m54086_170204_081430.ccs.bam \
-               --noPolish --minPasses 1
-
-    real    50m43.090s
-    user    3531m35.620s
-    sys     24m36.884s
+    $ ccs m54086_170204_081430.subreads.bam m54086_170204_081430.ccs.bam \
+          --noPolish --minPasses 1 --maxPoaCoverage 10
 
     $ cat primers.fasta
     >primer_5p
@@ -206,52 +231,55 @@ subreads to polished isoforms; timings are system dependent:
     AAGCAGTGGTATCAACGCAGAGTAC
 
     $ lima --version
-    lima 1.6.1 (commit v1.6.1-1-g77bd658)
+    lima 1.8.0 (commit v1.8.0)
 
-    $ time lima m54086_170204_081430.ccs.bam primers.fasta demux.bam \
-                --isoseq --no-pbi --dump-clips
+    $ lima m54086_170204_081430.ccs.bam primers.fasta m54086_170204_081430.fl.bam \
+           --isoseq --no-pbi
 
-    real    0m6.543s
-    user    0m51.170s
+    $ ls m54086_170204_081430.fl*
+    m54086_170204_081430.fl.json         m54086_170204_081430.fl.lima.summary
+    m54086_170204_081430.fl.lima.clips   m54086_170204_081430.fl.primer_5p--primer_3p.bam
+    m54086_170204_081430.fl.lima.counts  m54086_170204_081430.fl.primer_5p--primer_3p.subreadset.xml
+    m54086_170204_081430.fl.lima.report
 
-    $ ls demux*
-    demux.json  demux.lima.counts  demux.lima.report  demux.lima.summary  demux.primer_5p--primer_3p.bam  demux.primer_5p--primer_3p.subreadset.xml
+    $ isoseq3 refine m54086_170204_081430.fl.primer_5p--primer_3p.bam primers.fasta m54086_170204_081430.flnc.bam
 
-    $ time isoseq3 cluster demux.primer_5p--primer_3p.bam unpolished.bam --verbose
-    Read BAM                 : (200740) 8s 313ms
-    India                    : (197869) 9s 204ms
-    Save flnc file           : 35s 366ms
-    Convert to reads         : 36s 967ms
-    Sort Reads               : 69ms 756us
-    Aligning Linear          : 42s 620ms
-    Read to clusters         : 7s 506ms
-    Aligning Linear          : 37s 595ms
-    Merge by mapping         : 37s 645ms
-    Consensus                : 1m 47s
-    Merge by mapping         : 8s 861ms
-    Consensus                : 12s 633ms
-    Write output             : 3s 265ms
-    Complete run time        : 5m 12s
+    $ ls m54086_170204_081430.flnc.*
+    m54086_170204_081430.flnc.bam                   m54086_170204_081430.flnc.filter_summary.json
+    m54086_170204_081430.flnc.bam.pbi               m54086_170204_081430.flnc.report.csv
+    m54086_170204_081430.flnc.consensusreadset.xml
 
-    real    5m12.888s
-    user    58m35.243s
+    $ isoseq3 cluster m54086_170204_081430.flnc.bam unpolished.bam --verbose
+    Read BAM                 : (197791) 4s 20ms
+    Convert to reads         : 1s 431ms
+    Sort Reads               : 56ms 947us
+    Aligning Linear          : 2m 5s
+    Read to clusters         : 9s 432ms
+    Aligning Linear          : 54s 288ms
+    Merge by mapping         : 36s 138ms
+    Consensus                : 30s 126ms
+    Merge by mapping         : 5s 418ms
+    Consensus                : 3s 597ms
+    Write output             : 1s 134ms
+    Complete run time        : 4m 32s
 
     $ ls unpolished*
-    unpolished.bam  unpolished.bam.pbi  unpolished.cluster  unpolished.fasta  unpolished.flnc.bam  unpolished.flnc.bam.pbi  unpolished.flnc.consensusreadset.xml  unpolished.transcriptset.xml
+    unpolished.bam  unpolished.bam.pbi  unpolished.cluster  unpolished.fasta  unpolished.transcriptset.xml
 
-    $ time isoseq3 polish unpolished.bam m54086_170204_081430.subreads.bam polished.bam --verbose
+    $ isoseq3 polish unpolished.bam m54086_170204_081430.subreadset.xml polished.bam --verbose
     14561
 
-    real    60m37.564s
-    user    2832m8.382s
     $ ls polished*
-    polished.bam  polished.bam.pbi  polished.hq.fasta.gz  polished.hq.fastq.gz  polished.lq.fasta.gz  polished.lq.fastq.gz  polished.transcriptset.xml
+    polished.bam                 polished.hq.fastq.gz
+    polished.bam.pbi             polished.lq.fasta.gz
+    polished.cluster_report.csv  polished.lq.fastq.gz
+    polished.hq.fasta.gz         polished.transcriptset.xml
 
-If you have multiple cells, you should run `--split-bam` in the cluster step which will produce chunked cluster results. Each chunked cluster result can be run as a parallel polish job and merged at the end. The following example splits into 24 chunks. `sample.subreadset.xml` is the dataset containing all the input cells. The `isoseq3 polish` jobs can be run in parallel.
+Or run *isoseq3 cluster* it in split mode and `isoseq3 polish` in parallel:
 
-    $ isoseq3 cluster demux.primer_5p--primer_3p.bam unpolished.bam --split-bam 24
-    $ isoseq3 polish unpolished.0.bam sample.subreadset.xml polished.0.bam
-    $ isoseq3 polish unpolished.1.bam sample.subreadset.xml polished.1.bam
+    $ isoseq3 cluster m54086_170204_081430.flnc.bam unpolished.bam --split-bam 24
+    $ isoseq3 polish unpolished.0.bam m54086_170204_081430.subreadset.xml polished.0.bam
+    $ isoseq3 polish unpolished.1.bam m54086_170204_081430.subreadset.xml polished.1.bam
     $ ...
 
 
@@ -269,19 +297,16 @@ that requires no dependencies.
 Even though we also observe fewer polished transcripts with *IsoSeq3*, the
 overall quality is much higher. Most of the low-quality transcripts are lost in the
 demultiplexing step. *Isoseq1/2 classify* is too relaxed and is not filtering
-junk molecules to a satifactory level. In fact, *lima* calls are spot on and
+junk molecules to a satisfactory level. In fact, *lima* calls are spot on and
 effectively removes most molecules that are wrongly tagged, as in two 5' or two
 3' primers. Only a proper 5' and 3' primer pair allows to identify a full-length
 transcript and its orientation.
 
 ### I can't find the *classify* step
-*Classify* has been replaced with PacBio's standard demultiplexing tool *lima*.
-*Lima* does not remove polyA tails, nor detects concatmers. See the next Q.
-
-### Can I perform "classify only" to get FLNC reads?
-One of the early outputs of the `cluster` step is a `*.flnc.bam` file. Feel
-free to abort after this file has been written. This will be addressed in the
-upcoming version.
+*Classify* functionality has been split into two tools.
+Removal of (barcoded) primers is performed with PacBio's standard demultiplexing
+tool *lima*. *Lima* does not remove poly(A) tails, nor detects concatemers.
+For this, *isoseq3 refine* generates FLNC reads.
 
 ### How long will it take until my data has been processed?
 There is no ETA feature. Depending on the sample type, whole transcriptome
@@ -309,10 +334,6 @@ following criteria:
 
 There is no upper limit on the number of gaps.
 
-### My sample has poly(A) tails, how can I remove them?
-Use `--require-polya`. This filters for FL reads that have a poly(A) tail
-with at least 20 base pairs and removes identified tail.
-
 ### BAM tags explained
 Following BAM tags are being used:
 
@@ -323,6 +344,14 @@ Following BAM tags are being used:
  - `rq` Predicted accuracy for polished isoform
 
  Quality values are capped at `93`.
+
+## What SMRTbell designs are possible?
+
+PacBio supports three different SMRTbell designs for IsoSeq libraries.
+In all designs, transcripts are labelled with asymmetric primers,
+whereas a poly(A) tail is optional. Barcodes may be optionally added.
+
+<img width="600px" src="doc/img/isoseq3-barcoding.png"/>
 
 ## DISCLAIMER
 
